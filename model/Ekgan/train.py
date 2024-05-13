@@ -22,8 +22,10 @@ class ECGekgan:
         self.GI = InferenceGenerator().to(self.device)
         self.GL = LabelGenerator().to(self.device)
         self.DC = Discriminator().to(self.device)
+        self.GI_optimizer = optim.Adam(self.GI.parameters(), lr=0.95)
+        self.GL_optimizer = optim.Adam(self.GL.parameters(), lr=0.95)
+        self.DC_optimizer = optim.Adam(self.DC.parameters(), lr=0.95)
 
-        self.criterion = nn.MSELoss()
         # self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
         self.data_loader = ECGDataLoader(path, sampling_rate)
         self.X_train, self.y_train, self.X_test, self.y_test = self.data_loader.preprocess_data(self.test_fold)
@@ -32,7 +34,7 @@ class ECGekgan:
         # self.logger = JSLogger(level=level, log_file='../log.txt')
         self.lead = lead
 
-    def train(self, inference_generator_optimizer, discriminator_optimizer, label_generator_optimizer, lambda_, alpha):
+    def train(self, lambda_, alpha):
 
         train_dataset = TensorDataset(torch.tensor(self.X_train_scaled, dtype=torch.float32),
                                       torch.tensor(self.y_train[:, :, self.lead], dtype=torch.float32))
@@ -50,9 +52,9 @@ class ECGekgan:
                 # input_image = input_image.to(self.device)
                 # target = target.to(self.device)
 
-                inference_generator_optimizer.zero_grad()
-                discriminator_optimizer.zero_grad()
-                label_generator_optimizer.zero_grad()
+                self.GI_optimizer.zero_grad()
+                self.GL_optimizer.zero_grad()
+                self.DC_optimizer.zero_grad()
 
                 ig_lv, ig_output = self.GI(inputs)
                 lg_lv, lg_output = self.GL(inputs)
@@ -73,10 +75,57 @@ class ECGekgan:
                 total_lg_loss.backward(retain_graph=True)
                 lg_grads = [p.grad for p in self.GL.parameters() if p.grad is not None]
 
-                inference_generator_optimizer.step()
-                discriminator_optimizer.step()
-                label_generator_optimizer.step()
+                self.GI_optimizer.step()
+                self.GL_optimizer.step()
+                self.DC_optimizer.step()
 
-                print('epoch {} gen_total_loss {} ig_adversarial_loss {} ig_l1_loss {} lg_l2_loss {} vector_loss {}  '.format(
-                    epoch, total_ig_loss, ig_adversarial_loss, ig_l1_loss, lg_l1_loss, vector_loss))
+                print('epoch {} gen_total_loss {} ig_adversarial_loss {} ig_l1_loss {} lg_l2_loss {} vector_loss {}  '.
+                      format(epoch, total_ig_loss, ig_adversarial_loss, ig_l1_loss, lg_l1_loss, vector_loss))
 
+    def test(self, lambda_, alpha):
+        test_dataset = TensorDataset(torch.tensor(self.X_test_scaled, dtype=torch.float32),
+                                     torch.tensor(self.y_test[:, :, self.lead], dtype=torch.float32))
+        test_loader = DataLoader(test_dataset, batch_size=self.batch_size, shuffle=True)
+        total_loss = 0
+
+        self.GI.eval()
+        self.GL.eval()
+        self.DC.eval()
+
+        with torch.no_grad():
+            total_loss = 0
+            num_batches = 0
+            for inputs, targets in test_loader:
+                inputs = inputs.to(self.device)
+                targets = targets.to(self.device)
+                self.GI_optimizer.zero_grad()
+                self.GL_optimizer.zero_grad()
+                self.DC_optimizer.zero_grad()
+
+                ig_lv, ig_output = self.GI(inputs)
+                lg_lv, lg_output = self.GL(inputs)
+                disc_real_output = self.DC([inputs, targets], dim=1) # dim=1이 맞나...?
+                disc_generated_output = self.DC([inputs, ig_output])
+
+                total_lg_loss, lg_l1_loss = label_generator_loss(lg_output, inputs)
+                total_ig_loss, ig_adversarial_loss, ig_l1_loss, vector_loss = inference_generator_loss(
+                    disc_generated_output, ig_output, targets, lambda_, ig_lv, lg_lv, alpha)
+                disc_loss = discriminator_loss(disc_real_output, disc_generated_output)
+
+                total_ig_loss.backward(retain_graph=True)
+                ig_grads = [p.grad for p in self.GI.parameters() if p.grad is not None]
+
+                disc_loss.backward(retain_graph=True)
+                disc_grads = [p.grad for p in self.DC.parameters() if p.grad is not None]
+
+                total_lg_loss.backward(retain_graph=True)
+                lg_grads = [p.grad for p in self.GL.parameters() if p.grad is not None]
+
+                self.GI_optimizer.step()
+                self.GL_optimizer.step()
+                self.DC_optimizer.step()
+                num_batches += 1
+
+        average_loss = total_loss / num_batches
+        print(f'Test Loss: {average_loss:.4f}')
+        return average_loss
