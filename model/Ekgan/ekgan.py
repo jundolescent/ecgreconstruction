@@ -6,7 +6,7 @@ initializer = init.normal_
 
 class InferenceGenerator(nn.Module):
     def __init__(self):
-        super(InferenceGenerator, self).__init__()
+        super().__init__()
 
         # 모델의 필터 수 및 커널 크기 정의
         filters_encoder = [64, 128, 256, 512, 1024]
@@ -307,45 +307,3 @@ class Discriminator(nn.Module):
         return e5, x
 
 
-def train_step(input_image, target, inference_generator, discriminator,
-               inference_generator_optimizer, discriminator_optimizer, epoch,
-               label_generator, label_generator_optimizer, lambda_, alpha,
-               label_generator_loss, inference_generator_loss, discriminator_loss):
-    # model -> train()
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    inference_generator.train()
-    discriminator.train()
-    label_generator.train()
-
-    input_image = input_image.to(device)
-    target = target.to(device)
-
-    inference_generator_optimizer.zero_grad()
-    discriminator_optimizer.zero_grad()
-    label_generator_optimizer.zero_grad()
-
-    ig_lv, ig_output = inference_generator(input_image)
-    lg_lv, lg_output = label_generator(input_image)
-    disc_real_output = discriminator([input_image, target], dim=1) # dim=1이 맞나...?
-    disc_generated_output = discriminator([input_image, ig_output])
-
-    total_lg_loss, lg_l1_loss = label_generator_loss(lg_output, input_image)
-    total_ig_loss, ig_adversarial_loss, ig_l1_loss, vector_loss = inference_generator_loss(disc_generated_output,
-                                                                                           ig_output, target, lambda_,
-                                                                                           ig_lv, lg_lv, alpha)
-    disc_loss = discriminator_loss(disc_real_output, disc_generated_output)
-
-    total_ig_loss.backward(retain_graph=True)
-    ig_grads = [p.grad for p in inference_generator.parameters() if p.grad is not None]
-
-    disc_loss.backward(retain_graph=True)
-    disc_grads = [p.grad for p in discriminator.parameters() if p.grad is not None]
-
-    total_lg_loss.backward(retain_graph=True)
-    lg_grads = [p.grad for p in label_generator.parameters() if p.grad is not None]
-
-    inference_generator_optimizer.step()
-    discriminator_optimizer.step()
-    label_generator_optimizer.step()
-
-    print('epoch {} gen_total_loss {} ig_adversarial_loss {} ig_l1_loss {} lg_l2_loss {} vector_loss {}  '.format(epoch, total_ig_loss, ig_adversarial_loss, ig_l1_loss, lg_l1_loss, vector_loss))
